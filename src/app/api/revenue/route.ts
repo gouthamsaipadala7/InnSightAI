@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { AuthError, requireSession } from "@/lib/session";
+import { AuthError, requireRole } from "@/lib/session";
 import { tenantScopedPrisma } from "@/lib/tenant-prisma";
 
 export async function GET(request: Request) {
   let session;
   try {
-    session = await requireSession();
+    session = await requireRole("manager");
   } catch (e) {
     if (e instanceof AuthError) return NextResponse.json({ error: e.message }, { status: e.status });
     throw e;

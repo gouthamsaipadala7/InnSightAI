@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { AuthError, requireSession } from "@/lib/session";
+import { AuthError, requireRole } from "@/lib/session";
 
 export async function GET(request: Request) {
   let session;
-  try { session = await requireSession(); }
+  try { session = await requireRole("manager"); }
   catch (e) { if (e instanceof AuthError) return NextResponse.json({ error: e.message }, { status: e.status }); throw e; }
 
   const { searchParams } = new URL(request.url);
