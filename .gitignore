@@ -49,3 +49,5 @@ __pycache__/
 hotel-ai-service/.venv/
 backups/
 *.csv
+
+seed-output.md
