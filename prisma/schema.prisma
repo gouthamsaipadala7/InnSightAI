@@ -1,0 +1,301 @@
+// Hotel Management System — Phase 2 data model
+//
+// Multi-tenant: every operational table carries a `hotelId` foreign key back
+// to `hotels`, indexed, so every query in the app layer can (and must) be
+// scoped with `WHERE hotel_id = $1`. There is no cross-tenant table.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// --------------------------------------------------------------------------
+// Enums
+// --------------------------------------------------------------------------
+
+enum RoomCategory {
+  standard
+  deluxe
+  suite
+  custom
+}
+
+enum RoomStatus {
+  available
+  occupied
+  dirty
+  cleaning
+}
+
+enum EmployeeRole {
+  receptionist
+  manager
+}
+
+enum BookingStatus {
+  active
+  checked_out
+}
+
+enum HousekeepingStatus {
+  dirty
+  in_progress
+  completed
+}
+
+enum StaffStatus {
+  available
+  assigned
+}
+
+// --------------------------------------------------------------------------
+// Tenant root
+// --------------------------------------------------------------------------
+
+/// One row per hotel (tenant). One shared login credential set covers both
+/// the Receptionist and MD roles for that hotel, via the `employees` table.
+model Hotel {
+  id              String   @id @default(uuid()) @db.Uuid
+  name            String
+  contactNumber   String   @map("contact_number")
+  email           String
+  address         String
+  totalRooms      Int      @map("total_rooms")
+  employeesCount  Int      @map("employees_count")
+  /// Flips true after the one-time setup form is completed. Setup form is
+  /// editable afterward only by the MD — enforced in the app layer, not here.
+  setupCompleted  Boolean  @default(false) @map("setup_completed")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  roomTypes          RoomType[]
+  rooms               Room[]
+  employees            Employee[]
+  customers            Customer[]
+  bookings             Booking[]
+  housekeeping         Housekeeping[]
+  revenueLogs          RevenueLog[]
+  dailyBookingCounts   DailyBookingCount[]
+  staff                Staff[]
+
+  @@map("hotels")
+}
+
+// --------------------------------------------------------------------------
+// Tenant-scoped tables
+// --------------------------------------------------------------------------
+
+/// Room categories a hotel offers. `category` keeps the four-way bucket
+/// (standard/deluxe/suite/custom) queryable and chartable; `name` is the
+/// display label — equal to the category for the first three, freely chosen
+/// by the hotel when category = custom (e.g. "Poolside Villa").
+model RoomType {
+  id        String       @id @default(uuid()) @db.Uuid
+  hotelId   String       @map("hotel_id") @db.Uuid
+  category  RoomCategory
+  name      String
+  count     Int
+  basePrice Decimal      @map("base_price") @db.Decimal(10, 2)
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+
+  hotel Hotel  @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  rooms Room[]
+
+  @@index([hotelId])
+  @@map("room_types")
+}
+
+/// Individual physical rooms. `status` is the live operational state shown
+/// on the Check-in & Room Availability board.
+model Room {
+  id         String     @id @default(uuid()) @db.Uuid
+  hotelId    String     @map("hotel_id") @db.Uuid
+  roomNumber String     @map("room_number")
+  roomTypeId String     @map("room_type_id") @db.Uuid
+  status     RoomStatus @default(available)
+  createdAt  DateTime   @default(now()) @map("created_at")
+  updatedAt  DateTime   @updatedAt @map("updated_at")
+
+  hotel        Hotel          @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  roomType     RoomType       @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+  bookings     Booking[]
+  housekeeping Housekeeping[]
+  assignedStaff Staff[]
+
+  /// Room numbers only need to be unique within a hotel, not globally.
+  @@unique([hotelId, roomNumber])
+  /// Powers the live availability board: "give me every room for this hotel
+  /// in status X" without a table scan.
+  @@index([hotelId, status])
+  @@map("rooms")
+}
+
+/// Login identities. One hotel can have several employee rows (front-desk
+/// staff, MD, etc.), each tagged with a role.
+model Employee {
+  id           String       @id @default(uuid()) @db.Uuid
+  hotelId      String       @map("hotel_id") @db.Uuid
+  username     String
+  passwordHash String       @map("password_hash")
+  role         EmployeeRole
+  name         String
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+
+  hotel Hotel @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+
+  /// Usernames only need to be unique within a hotel, not globally — two
+  /// different hotels can both have a "reception" login.
+  @@unique([hotelId, username])
+  @@map("employees")
+}
+
+/// Guests. Kept separate from bookings so repeat-guest history (Guest
+/// History module) doesn't require de-duplicating booking rows.
+model Customer {
+  id        String   @id @default(uuid()) @db.Uuid
+  hotelId   String   @map("hotel_id") @db.Uuid
+  name      String
+  phone     String
+  idProof   String?  @map("id_proof")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  hotel    Hotel     @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  bookings Booking[]
+
+  @@index([hotelId])
+  /// Reception looks guests up by phone constantly at check-in.
+  @@index([hotelId, phone])
+  @@map("customers")
+}
+
+/// One row per stay. `totalAmount` is filled in at checkout; `checkoutTime`
+/// stays null while the stay is active.
+model Booking {
+  id             String        @id @default(uuid()) @db.Uuid
+  hotelId        String        @map("hotel_id") @db.Uuid
+  customerId     String        @map("customer_id") @db.Uuid
+  roomId         String        @map("room_id") @db.Uuid
+  checkinTime    DateTime      @map("checkin_time")
+  checkoutTime   DateTime?     @map("checkout_time")
+  initialPayment Decimal       @map("initial_payment") @db.Decimal(10, 2)
+  totalAmount    Decimal?      @map("total_amount") @db.Decimal(10, 2)
+  status         BookingStatus @default(active)
+  createdAt      DateTime      @default(now()) @map("created_at")
+  updatedAt      DateTime      @updatedAt @map("updated_at")
+
+  hotel       Hotel        @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  customer    Customer     @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  room        Room         @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  revenueLogs RevenueLog[]
+
+  @@index([hotelId])
+  /// "Show active bookings" / "show checked-out guests" — View Bookings and
+  /// Guest History both filter on this.
+  @@index([hotelId, status])
+  /// Analysis module's custom date-range revenue/booking queries.
+  @@index([hotelId, checkinTime])
+  @@index([roomId])
+  @@index([customerId])
+  @@map("bookings")
+}
+
+/// Cleaning lifecycle per room. Deliberately carries its own `hotelId`
+/// (denormalized from `rooms`) even though the brief's column list didn't
+/// list one — flagging this as an intentional addition, not an oversight:
+/// the brief's own multi-tenant rule ("every query must be scoped to a
+/// hotel, with indexes on hotel_id") applies here too, and without it every
+/// housekeeping query would need a join through `rooms` just to filter by
+/// tenant. Easy to drop if you'd rather keep it join-only.
+model Housekeeping {
+  id                String             @id @default(uuid()) @db.Uuid
+  hotelId           String             @map("hotel_id") @db.Uuid
+  roomId            String             @map("room_id") @db.Uuid
+  assignedStaff     String?            @map("assigned_staff")
+  status            HousekeepingStatus @default(dirty)
+  markedDirtyAt     DateTime?          @map("marked_dirty_at")
+  cleaningStartedAt DateTime?          @map("cleaning_started_at")
+  completedAt       DateTime?          @map("completed_at")
+  createdAt         DateTime           @default(now()) @map("created_at")
+  updatedAt         DateTime           @updatedAt @map("updated_at")
+  staffId           String?            @map("staff_id") @db.Uuid
+
+  hotel Hotel  @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  room  Room   @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  staff Staff? @relation(fields: [staffId], references: [id], onDelete: SetNull)
+
+  @@index([hotelId])
+  @@index([hotelId, status])
+  @@index([roomId])
+  @@map("housekeeping")
+}
+
+/// Append-only ledger, one row per completed charge. Exists separately from
+/// `bookings.totalAmount` so the Revenue and Analysis modules can query
+/// (and later, sum/report on) revenue events directly without recomputing
+/// from booking state, and so partial payments/refunds have somewhere to
+/// go later without altering booking history.
+model RevenueLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  hotelId   String   @map("hotel_id") @db.Uuid
+  bookingId String   @map("booking_id") @db.Uuid
+  amount    Decimal  @db.Decimal(10, 2)
+  date      DateTime @db.Date
+  createdAt DateTime @default(now()) @map("created_at")
+
+  hotel   Hotel   @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([hotelId])
+  /// Analysis module's "revenue by custom date range" query.
+  @@index([hotelId, date])
+  @@map("revenue_log")
+}
+
+/// Small daily rollup: one row per (hotel, calendar date) with that day's
+/// booking count. Written by the app layer whenever a booking is created
+/// (or backfilled by a nightly job) so the AI microservice (Track B) can
+/// pull a clean daily time series straight off this table — Prophet and the
+/// pooled XGBoost residual model both want "date, count" per hotel, not raw
+/// booking rows aggregated on every forecast request.
+model DailyBookingCount {
+  id            String   @id @default(uuid()) @db.Uuid
+  hotelId       String   @map("hotel_id") @db.Uuid
+  date          DateTime @db.Date
+  count         Int      @default(0)
+  isSpikePeriod Boolean  @default(false) @map("is_spike_period")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  hotel Hotel @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+
+  /// One rollup row per hotel per day; this unique constraint is itself the
+  /// required (hotel_id, date) index — exactly what the AI microservice
+  /// will query on ("give me hotel X's daily series in date order").
+  @@unique([hotelId, date])
+  @@map("daily_booking_counts")
+}
+
+model Staff {
+  id             String      @id @default(uuid()) @db.Uuid
+  hotelId        String      @map("hotel_id") @db.Uuid
+  name           String
+  status         StaffStatus @default(available)
+  assignedRoomId String?     @map("assigned_room_id") @db.Uuid
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  hotel        Hotel          @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  assignedRoom Room?          @relation(fields: [assignedRoomId], references: [id], onDelete: SetNull)
+  housekeeping Housekeeping[]
+
+  @@index([hotelId])
+  @@index([hotelId, status])
+  @@map("staff")
+}

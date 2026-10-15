@@ -1,0 +1,1 @@
+ALTER TABLE "daily_booking_counts" ADD COLUMN "is_spike_period" BOOLEAN NOT NULL DEFAULT false;

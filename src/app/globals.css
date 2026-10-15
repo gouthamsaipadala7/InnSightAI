@@ -1,0 +1,151 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* ------------------------------------------------------------------ */
+/* Design tokens — graphite neutrals + single emerald accent          */
+/* Source: project design system spec. Do not add other accent hues.  */
+/* ------------------------------------------------------------------ */
+:root {
+  --radius: 0.625rem;
+
+  /* Graphite scale */
+  --graphite-950: #09090b;
+  --graphite-900: #18181b;
+  --graphite-800: #27272a;
+  --graphite-700: #3f3f46;
+  --graphite-600: #52525b;
+  --graphite-500: #71717a;
+  --graphite-400: #a1a1aa;
+  --graphite-300: #d4d4d8;
+  --graphite-100: #f4f4f5;
+  --graphite-50: #fafafa;
+
+  /* Single accent */
+  --emerald: #10b981;
+  --emerald-hover: #0ea371;
+  --emerald-soft: #10b9811a; /* 10% */
+
+  /* Semantic surface tokens */
+  --background: var(--graphite-50);
+  --foreground: var(--graphite-950);
+
+  --surface: #ffffff;
+  --surface-foreground: var(--graphite-950);
+
+  --card: #ffffff;
+  --card-foreground: var(--graphite-950);
+
+  --popover: #ffffff;
+  --popover-foreground: var(--graphite-950);
+
+  --primary: var(--emerald);
+  --primary-foreground: #ffffff;
+
+  --secondary: var(--graphite-100);
+  --secondary-foreground: var(--graphite-900);
+
+  --muted: var(--graphite-100);
+  --muted-foreground: var(--graphite-500);
+
+  --accent: var(--emerald-soft);
+  --accent-foreground: var(--emerald-hover);
+
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+
+  --border: var(--graphite-300);
+  --input: var(--graphite-300);
+  --ring: var(--emerald);
+}
+
+/* This app does not ship a dark-mode variant yet — the design system is a
+   single light "premium SaaS" theme. Intentionally no prefers-color-scheme
+   override here; revisit if/when a dark mode is scoped. */
+
+@theme inline {
+  /* Surfaces */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-foreground: var(--surface-foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  /* Brand */
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  /* Full graphite ramp + emerald, exposed as utility classes:
+     bg-graphite-950, text-graphite-500, border-graphite-300, bg-emerald, etc. */
+  --color-graphite-950: var(--graphite-950);
+  --color-graphite-900: var(--graphite-900);
+  --color-graphite-800: var(--graphite-800);
+  --color-graphite-700: var(--graphite-700);
+  --color-graphite-600: var(--graphite-600);
+  --color-graphite-500: var(--graphite-500);
+  --color-graphite-400: var(--graphite-400);
+  --color-graphite-300: var(--graphite-300);
+  --color-graphite-100: var(--graphite-100);
+  --color-graphite-50: var(--graphite-50);
+  --color-emerald: var(--emerald);
+  --color-emerald-hover: var(--emerald-hover);
+  --color-emerald-soft: var(--emerald-soft);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+
+  /* 8px spacing system as named tokens (Tailwind's default scale already
+     lands on 8/16/24/32/40/48 at spacing-2/4/6/8/10/12, kept here as
+     explicit aliases so intent is legible in class names). */
+  --spacing-8: 0.5rem; /* 8px  */
+  --spacing-16: 1rem; /* 16px */
+  --spacing-24: 1.5rem; /* 24px */
+  --spacing-32: 2rem; /* 32px */
+  --spacing-40: 2.5rem; /* 40px */
+  --spacing-48: 3rem; /* 48px */
+
+  --shadow-soft: 0 1px 2px 0 rgb(9 9 11 / 0.04), 0 1px 3px 0 rgb(9 9 11 / 0.06);
+  --shadow-soft-md: 0 4px 12px -2px rgb(9 9 11 / 0.06), 0 2px 4px -2px rgb(9 9 11 / 0.04);
+  --shadow-soft-lg: 0 12px 24px -4px rgb(9 9 11 / 0.08), 0 4px 8px -2px rgb(9 9 11 / 0.04);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "cv11", "ss01";
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+/* Reusable glassmorphism surface for select components (nav, modals,
+   floating panels) per design system spec. Applied selectively, not
+   globally. */
+@layer utilities {
+  .glass-surface {
+    background: rgb(255 255 255 / 0.72);
+    backdrop-filter: blur(16px) saturate(1.4);
+    -webkit-backdrop-filter: blur(16px) saturate(1.4);
+    border: 1px solid rgb(255 255 255 / 0.5);
+  }
+}
