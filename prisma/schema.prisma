@@ -249,3 +249,13 @@ model Staff {
   @@index([hotelId, status])
   @@map("staff")
 }
+
+model LoginAttempt {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String
+  success   Boolean
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([key, createdAt(sort: Desc)])
+  @@map("login_attempts")
+}
