@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 
 import { prisma } from "@/lib/prisma";
-import { AuthError, requireSession } from "@/lib/session";
+import { AuthError, requireRole } from "@/lib/session";
 import {
   FIXED_CATEGORY_PREFIX,
   buildSequentialRoomNumbers,
@@ -26,14 +26,17 @@ interface SetupBody {
 
 const VALID_CATEGORIES = new Set(["standard", "deluxe", "suite", "custom"]);
 
-function validate(body: SetupBody): { errors: string[]; data?: {
-  hotelName: string;
-  employeesCount: number;
-  contactNumber: string;
-  email: string;
-  address: string;
-  roomTypes: RoomTypeInput[];
-} } {
+function validate(body: SetupBody): {
+  errors: string[];
+  data?: {
+    hotelName: string;
+    employeesCount: number;
+    contactNumber: string;
+    email: string;
+    address: string;
+    roomTypes: RoomTypeInput[];
+  };
+} {
   const errors: string[] = [];
 
   const hotelName = typeof body.hotelName === "string" ? body.hotelName.trim() : "";
@@ -97,7 +100,7 @@ function validate(body: SetupBody): { errors: string[]; data?: {
 export async function POST(request: Request) {
   let session;
   try {
-    session = await requireSession();
+    session = await requireRole("manager");
   } catch (error) {
     if (error instanceof AuthError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
@@ -130,59 +133,72 @@ export async function POST(request: Request) {
 
   const totalRooms = data.roomTypes.reduce((sum, rt) => sum + rt.count, 0);
 
-  // customIndex tracks how many *custom* categories we've assigned a prefix
-  // to within this single submission — the hotel has no existing custom
-  // types yet (this is its first-ever setup), so we don't need to query the
-  // DB for a starting offset the way Hotel Settings will later.
   let customIndex = 0;
 
-  const result = await prisma.$transaction(async (tx) => {
-    await tx.hotel.update({
-      where: { id: hotel.id },
-      data: {
-        name: data.hotelName,
-        contactNumber: data.contactNumber,
-        email: data.email,
-        address: data.address,
-        totalRooms,
-        employeesCount: data.employeesCount,
-        setupCompleted: true,
-      },
-    });
+  let result;
+  try {
+    result = await prisma.$transaction(async (tx) => {
+      const claimed = await tx.hotel.updateMany({
+        where: { id: hotel.id, setupCompleted: false },
+        data: { setupCompleted: true },
+      });
+      if (claimed.count !== 1) throw new Error("ALREADY_SETUP");
 
-    const createdRoomTypes = [];
-    for (const rt of data.roomTypes) {
-      const roomType = await tx.roomType.create({
+      await tx.hotel.update({
+        where: { id: hotel.id },
         data: {
-          hotelId: hotel.id,
-          category: rt.category,
-          name: rt.name,
-          count: rt.count,
-          basePrice: rt.basePrice,
+          name: data.hotelName,
+          contactNumber: data.contactNumber,
+          email: data.email,
+          address: data.address,
+          totalRooms,
+          employeesCount: data.employeesCount,
+          setupCompleted: true,
         },
       });
 
-      const prefix =
-        rt.category === "custom"
-          ? nextCustomPrefix(customIndex++)
-          : FIXED_CATEGORY_PREFIX[rt.category];
+      const createdRoomTypes = [];
+      for (const rt of data.roomTypes) {
+        const roomType = await tx.roomType.create({
+          data: {
+            hotelId: hotel.id,
+            category: rt.category,
+            name: rt.name,
+            count: rt.count,
+            basePrice: rt.basePrice,
+          },
+        });
 
-      const roomNumbers = buildSequentialRoomNumbers(prefix, 0, rt.count);
+        const prefix =
+          rt.category === "custom"
+            ? nextCustomPrefix(customIndex++)
+            : FIXED_CATEGORY_PREFIX[rt.category];
 
-      await tx.room.createMany({
-        data: roomNumbers.map((roomNumber) => ({
-          hotelId: hotel.id,
-          roomNumber,
-          roomTypeId: roomType.id,
-          status: "available" as const,
-        })),
-      });
+        const roomNumbers = buildSequentialRoomNumbers(prefix, 0, rt.count);
 
-      createdRoomTypes.push({ ...roomType, roomNumbers });
+        await tx.room.createMany({
+          data: roomNumbers.map((roomNumber) => ({
+            hotelId: hotel.id,
+            roomNumber,
+            roomTypeId: roomType.id,
+            status: "available" as const,
+          })),
+        });
+
+        createdRoomTypes.push({ ...roomType, roomNumbers });
+      }
+
+      return createdRoomTypes;
+    });
+  } catch (e) {
+    if (e instanceof Error && e.message === "ALREADY_SETUP") {
+      return NextResponse.json(
+        { error: "This hotel has already completed setup." },
+        { status: 409 }
+      );
     }
-
-    return createdRoomTypes;
-  });
+    throw e;
+  }
 
   return NextResponse.json({
     success: true,
