@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { AuthError, requireSession } from "@/lib/session";
+
+const assignSchema = z.object({ staffId: z.string().uuid("Invalid staff selection.") });
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   let session;
@@ -9,8 +12,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
 
   const { id } = await params;
   const body = await request.json().catch(() => null);
-  const staffId = typeof body?.staffId === "string" ? body.staffId : "";
-  if (!staffId) return NextResponse.json({ error: "Staff selection is required." }, { status: 400 });
+  const parsedBody = assignSchema.safeParse(body);
+  if (!parsedBody.success) return NextResponse.json({ error: "Staff selection is required." }, { status: 400 });
+  const staffId = parsedBody.data.staffId;
 
   const record = await prisma.housekeeping.findFirst({ where: { id, hotelId: session.hotelId } });
   if (!record) return NextResponse.json({ error: "Not found." }, { status: 404 });
