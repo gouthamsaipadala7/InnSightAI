@@ -6,6 +6,9 @@ import { SESSION_COOKIE_NAME, signSession, verifyPassword } from "@/lib/auth";
 import { isLocked, recordAttempt } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
+  if (Number(request.headers.get("content-length") ?? 0) > 10_000) {
+    return NextResponse.json({ error: "Request too large." }, { status: 413 });
+  }
   let body: { username?: unknown; password?: unknown };
   try {
     body = await request.json();

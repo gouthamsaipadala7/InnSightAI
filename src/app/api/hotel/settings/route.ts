@@ -35,6 +35,9 @@ const settingsSchema = z.object({
 });
 
 export async function PATCH(request: Request) {
+  if (Number(request.headers.get("content-length") ?? 0) > 100_000) {
+    return NextResponse.json({ error: "Request too large." }, { status: 413 });
+  }
   let session;
   try {
     session = await requireRole("manager");
