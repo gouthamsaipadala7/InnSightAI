@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
 import { AuthError, requireSession } from "@/lib/session";
-import { istNoonUtc } from "@/lib/dates";
+import { localToUtc } from "@/lib/dates";
 
 const dateRe = /^\d{4}-\d{2}-\d{2}$/;
 const schema = z.object({
@@ -36,8 +36,10 @@ export async function POST(request: Request) {
     );
   }
   const { customerName, phone, roomId, initialPayment } = parsed.data;
-  const checkin = istNoonUtc(parsed.data.from);
-  const checkout = istNoonUtc(parsed.data.to);
+  const hotel = await prisma.hotel.findUnique({ where: { id: session.hotelId } });
+  if (!hotel) return NextResponse.json({ error: "Hotel not found." }, { status: 404 });
+  const checkin = localToUtc(parsed.data.from, hotel.checkinHhmm, hotel.timezone);
+  const checkout = localToUtc(parsed.data.to, hotel.checkoutHhmm, hotel.timezone);
   if (checkout <= checkin) {
     return NextResponse.json({ error: "Check-out must be after check-in." }, { status: 400 });
   }

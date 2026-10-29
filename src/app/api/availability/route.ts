@@ -3,7 +3,7 @@ import { z } from "zod";
 
 import { prisma } from "@/lib/prisma";
 import { AuthError, requireSession } from "@/lib/session";
-import { istNoonUtc } from "@/lib/dates";
+import { localToUtc } from "@/lib/dates";
 
 export const dynamic = "force-dynamic";
 
@@ -33,8 +33,10 @@ export async function GET(request: Request) {
       { status: 400 }
     );
   }
-  const start = istNoonUtc(parsed.data.from);
-  const end = istNoonUtc(parsed.data.to);
+  const hotel = await prisma.hotel.findUnique({ where: { id: session.hotelId } });
+  if (!hotel) return NextResponse.json({ error: "Hotel not found." }, { status: 404 });
+  const start = localToUtc(parsed.data.from, hotel.checkinHhmm, hotel.timezone);
+  const end = localToUtc(parsed.data.to, hotel.checkoutHhmm, hotel.timezone);
   if (end <= start) {
     return NextResponse.json({ error: "Check-out must be after check-in." }, { status: 400 });
   }
