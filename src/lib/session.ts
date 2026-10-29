@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 
 import { SESSION_COOKIE_NAME, verifySession, type SessionPayload } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 
 /**
  * Reads and verifies the session cookie for the current request. Use in
@@ -16,7 +17,14 @@ export async function getSession(): Promise<SessionPayload | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
   if (!token) return null;
-  return verifySession(token);
+    const session = await verifySession(token);
+  if (!session) return null;
+  const emp = await prisma.employee.findUnique({
+    where: { id: session.employeeId },
+    select: { tokenVersion: true },
+  });
+  if (!emp || emp.tokenVersion !== (session.tokenVersion ?? 0)) return null;
+  return session;
 }
 
 /**

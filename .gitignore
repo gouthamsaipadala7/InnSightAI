@@ -49,3 +49,10 @@ __pycache__/
 hotel-ai-service/.venv/
 backups/
 *.csv
+
+seed-output.md
+
+!hotel-ai-service/experiments/*.csv
+!hotel-ai-service/data/processed/daily_booking_counts_combined.csv
+hotel-ai-service/data/raw/
+*.joblib

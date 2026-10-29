@@ -1,80 +1,43 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
+import { audit } from "@/lib/audit";
 
 import { prisma } from "@/lib/prisma";
 import { AuthError, requireRole } from "@/lib/session";
 import { nextCustomPrefix, buildSequentialRoomNumbers } from "@/lib/hotel-rooms";
 
-interface ExistingRoomTypeInput {
-  id: string;
-  name: string;
-  count: number;
-  basePrice: number;
-}
-
-interface NewRoomTypeInput {
-  name: string;
-  count: number;
-  basePrice: number;
-}
-
-interface SettingsBody {
-  hotelName?: unknown;
-  contactNumber?: unknown;
-  email?: unknown;
-  address?: unknown;
-  existingRoomTypes?: unknown;
-  newRoomTypes?: unknown;
-}
-
-function validate(body: SettingsBody) {
-  const errors: string[] = [];
-
-  const hotelName = typeof body.hotelName === "string" ? body.hotelName.trim() : "";
-  if (!hotelName) errors.push("Hotel name is required.");
-
-  const contactNumber = typeof body.contactNumber === "string" ? body.contactNumber.trim() : "";
-  if (!contactNumber) errors.push("Contact number is required.");
-
-  const email = typeof body.email === "string" ? body.email.trim() : "";
-  if (!email || !email.includes("@")) errors.push("A valid email is required.");
-
-  const address = typeof body.address === "string" ? body.address.trim() : "";
-  if (!address) errors.push("Address is required.");
-
-  const existingRoomTypes: ExistingRoomTypeInput[] = [];
-  (Array.isArray(body.existingRoomTypes) ? body.existingRoomTypes : []).forEach(
-    (rt: unknown, i: number) => {
-      const r = rt as Record<string, unknown>;
-      const id = typeof r.id === "string" ? r.id : "";
-      const name = typeof r.name === "string" ? r.name.trim() : "";
-      const count = Number(r.count);
-      const basePrice = Number(r.basePrice);
-      if (!id || !name || !Number.isInteger(count) || count < 1 || !Number.isFinite(basePrice) || basePrice <= 0) {
-        errors.push(`Room type #${i + 1}: invalid values.`);
-        return;
-      }
-      existingRoomTypes.push({ id, name, count, basePrice });
-    }
-  );
-
-  const newRoomTypes: NewRoomTypeInput[] = [];
-  (Array.isArray(body.newRoomTypes) ? body.newRoomTypes : []).forEach((rt: unknown, i: number) => {
-    const r = rt as Record<string, unknown>;
-    const name = typeof r.name === "string" ? r.name.trim() : "";
-    const count = Number(r.count);
-    const basePrice = Number(r.basePrice);
-    if (!name || !Number.isInteger(count) || count < 1 || !Number.isFinite(basePrice) || basePrice <= 0) {
-      errors.push(`New room type #${i + 1}: invalid values.`);
-      return;
-    }
-    newRoomTypes.push({ name, count, basePrice });
-  });
-
-  if (errors.length > 0) return { errors };
-  return { errors: [], data: { hotelName, contactNumber, email, address, existingRoomTypes, newRoomTypes } };
-}
+const settingsSchema = z.object({
+  hotelName: z.string().trim().min(1, "Hotel name is required.").max(120),
+  contactNumber: z.string().trim().regex(/^[0-9+\-\s]{7,15}$/, "Enter a valid contact number."),
+  email: z.string().trim().email("A valid email is required.").max(150),
+  address: z.string().trim().min(1, "Address is required.").max(300),
+  existingRoomTypes: z
+    .array(
+      z.object({
+        id: z.string().uuid(),
+        name: z.string().trim().min(1).max(60),
+        count: z.coerce.number().int().min(1).max(500),
+        basePrice: z.coerce.number().positive().max(1_000_000),
+      })
+    )
+    .max(20)
+    .default([]),
+  newRoomTypes: z
+    .array(
+      z.object({
+        name: z.string().trim().min(1).max(60),
+        count: z.coerce.number().int().min(1).max(500),
+        basePrice: z.coerce.number().positive().max(1_000_000),
+      })
+    )
+    .max(20)
+    .default([]),
+});
 
 export async function PATCH(request: Request) {
+  if (Number(request.headers.get("content-length") ?? 0) > 100_000) {
+    return NextResponse.json({ error: "Request too large." }, { status: 413 });
+  }
   let session;
   try {
     session = await requireRole("manager");
@@ -85,17 +48,21 @@ export async function PATCH(request: Request) {
     throw error;
   }
 
-  let body: SettingsBody;
+  let body: unknown;
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid request body." }, { status: 400 });
   }
 
-  const { errors, data } = validate(body);
-  if (!data) {
-    return NextResponse.json({ error: "Validation failed.", details: errors }, { status: 400 });
+  const parsed = settingsSchema.safeParse(body);
+  if (!parsed.success) {
+    return NextResponse.json(
+      { error: "Validation failed.", details: parsed.error.issues.map((i) => i.message) },
+      { status: 400 }
+    );
   }
+  const data = parsed.data;
 
   try {
     const summary = await prisma.$transaction(async (tx) => {
@@ -109,10 +76,7 @@ export async function PATCH(request: Request) {
         },
       });
 
-      // --- Existing room types: update name/price, grow or shrink count ---
       for (const rt of data.existingRoomTypes) {
-        // Tenant-safety: only ever touch a room type that belongs to THIS
-        // hotel, even though `requireRole` already confirmed the session.
         const current = await tx.roomType.findFirst({
           where: { id: rt.id, hotelId: session.hotelId },
         });
@@ -171,9 +135,6 @@ export async function PATCH(request: Request) {
         });
       }
 
-      // --- Brand new room types (always treated as "custom" — see note in
-      // hotel-rooms.ts on why settings doesn't offer standard/deluxe/suite
-      // here: avoids two room types colliding on the same numbering block).
       const existingCustomCount = await tx.roomType.count({
         where: { hotelId: session.hotelId, category: "custom" },
       });
@@ -203,8 +164,6 @@ export async function PATCH(request: Request) {
         });
       }
 
-      // Recompute totalRooms from the ground truth (all room types' counts)
-      // rather than trying to track a running delta — simpler and can't drift.
       const allRoomTypes = await tx.roomType.findMany({
         where: { hotelId: session.hotelId },
       });
@@ -218,6 +177,9 @@ export async function PATCH(request: Request) {
       return { totalRooms, roomTypeCount: allRoomTypes.length };
     });
 
+      await audit(session.hotelId, session.employeeId, "hotel_settings_updated", {
+      totalRooms: summary.totalRooms,
+    });
     return NextResponse.json({ success: true, ...summary });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Update failed.";

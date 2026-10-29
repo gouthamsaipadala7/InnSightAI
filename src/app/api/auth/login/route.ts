@@ -1,22 +1,14 @@
 import { NextResponse } from "next/server";
+import { audit } from "@/lib/audit";
 
 import { prisma } from "@/lib/prisma";
 import { SESSION_COOKIE_NAME, signSession, verifyPassword } from "@/lib/auth";
+import { isLocked, recordAttempt } from "@/lib/rate-limit";
 
-/**
- * Single login form for both roles — the client sends only username +
- * password, no hotel selector. The backend determines both the hotel and
- * the role by looking the username up in `employees`.
- *
- * Design note: `employees` enforces username uniqueness *per hotel*
- * (`@@unique([hotelId, username])`), not globally — two different hotels
- * could in principle pick the same username. This lookup is global
- * (`findFirst` by username alone), so it depends on usernames being
- * globally unique in practice. The seed script follows a hotel-prefixed
- * convention (e.g. "grandpalace.manager") specifically to guarantee that in
- * the seeded data.
- */
 export async function POST(request: Request) {
+  if (Number(request.headers.get("content-length") ?? 0) > 10_000) {
+    return NextResponse.json({ error: "Request too large." }, { status: 413 });
+  }
   let body: { username?: unknown; password?: unknown };
   try {
     body = await request.json();
@@ -34,6 +26,14 @@ export async function POST(request: Request) {
     );
   }
 
+  const limitKey = `login:${username.toLowerCase()}`;
+  if (await isLocked(limitKey)) {
+    return NextResponse.json(
+      { error: "Too many failed attempts. Try again in 15 minutes." },
+      { status: 429 }
+    );
+  }
+
   const employee = await prisma.employee.findFirst({
     where: { username },
     include: { hotel: { select: { id: true, name: true, setupCompleted: true } } },
@@ -43,13 +43,17 @@ export async function POST(request: Request) {
     NextResponse.json({ error: "Invalid username or password." }, { status: 401 });
 
   if (!employee) {
+    await recordAttempt(limitKey, false);
     return invalidCredentials();
   }
 
   const passwordMatches = await verifyPassword(password, employee.passwordHash);
   if (!passwordMatches) {
+    await recordAttempt(limitKey, false);
     return invalidCredentials();
   }
+  await recordAttempt(limitKey, true);
+  await audit(employee.hotelId, employee.id, "login");
 
   const token = await signSession({
     employeeId: employee.id,
@@ -58,6 +62,7 @@ export async function POST(request: Request) {
     role: employee.role,
     username: employee.username,
     name: employee.name,
+    tokenVersion: employee.tokenVersion,
   });
 
   const response = NextResponse.json({

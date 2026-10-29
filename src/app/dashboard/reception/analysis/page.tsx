@@ -30,7 +30,7 @@ export default function AnalysisPage() {
           <div className="grid grid-cols-3 gap-4">
             <div className="bg-white rounded-xl shadow-sm p-6">
               <p className="text-xs text-[#A1A1AA]">Total revenue</p>
-              <p className="mt-1 text-2xl font-semibold text-[#18181B]">₹{data.totalRevenue.toLocaleString()}</p>
+              <p className="mt-1 text-2xl font-semibold text-[#18181B]">₹{(data.totalRevenue ?? 0).toLocaleString()}</p>
             </div>
             <div className="bg-white rounded-xl shadow-sm p-6">
               <p className="text-xs text-[#A1A1AA]">Total bookings</p>

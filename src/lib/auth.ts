@@ -21,6 +21,7 @@ export interface SessionPayload {
   role: EmployeeRole;
   username: string;
   name: string;
+  tokenVersion: number;
 }
 
 function getSecretKey() {

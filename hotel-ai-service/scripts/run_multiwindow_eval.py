@@ -1,108 +1,103 @@
 from __future__ import annotations
-import sys
+import sys, time, pickle, random, warnings
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from sklearn.metrics import mean_absolute_percentage_error, root_mean_squared_error
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from prophet.serialize import model_to_json
 from app.config import settings
 from app.data.pipeline import run_pipeline
 from app.models.prophet_baseline import fit_prophet_baseline
 from app.models.coldstart import fit_prophet_window
 from app.models.feature_engineering import add_features, FEATURE_COLS
 from app.models.xgboost_pooled import train_pooled_xgb
-from sklearn.metrics import mean_absolute_error
 
+SEED = 42
+random.seed(SEED); np.random.seed(SEED)
+warnings.filterwarnings("ignore")
 WINDOWS = [("14d", 14), ("30d", 30), ("90d", 90), ("180d", 180), ("full", None)]
-TEST_WINDOW_DAYS = 30
-XGB_PARAMS = dict(n_estimators=120, max_depth=3, learning_rate=0.05, reg_lambda=5.0)
-
-EXPERIMENTS_DIR = settings.processed_dir.parent.parent / "experiments"
-EXPERIMENTS_DIR.mkdir(parents=True, exist_ok=True)
-
-def score(actual, pred):
-    mape = mean_absolute_percentage_error(actual, pred) * 100
-    return {
-        "mae": mean_absolute_error(actual, pred),
-        "rmse": root_mean_squared_error(actual, pred),
-        "mape": mape,
-        "accuracy": 100 - mape,
-    }
+TEST_DAYS = 30
+XGB = dict(n_estimators=120, max_depth=3, learning_rate=0.05, reg_lambda=5.0, random_state=SEED)
+EXP = settings.processed_dir.parent.parent / "experiments"
+EXP.mkdir(parents=True, exist_ok=True)
 
 def main():
     df = run_pipeline()
-    hotel_ids = sorted(df["hotel_id"].unique())
+    # platform seed ended 2026-09-13; later rows are live app check-ins, not demand history
+    df = df[(df["source"] == "kaggle_pretrain") | (df["date"] <= pd.Timestamp("2026-09-13"))]
+    assert df.hotel_id.nunique() >= 5, "Platform data missing - fix the DB connection first"
+    ids = sorted(df["hotel_id"].unique())
+    full_res = {h: fit_prophet_baseline(df[df.hotel_id == h], h)[2] for h in ids}
+    out = []
 
-    # Full-history residuals per hotel, computed ONCE (used as the "pool" for
-    # every other hotel, regardless of the cold hotel's window size).
-    full_residuals = {}
-    for hid in hotel_ids:
-        _, _, res_df, _ = fit_prophet_baseline(df[df["hotel_id"] == hid], hid)
-        full_residuals[hid] = res_df
-
-    rows = []
-    for cold_id in hotel_ids:
-        hotel_df = df[df["hotel_id"] == cold_id]
-        max_date = hotel_df["date"].max()
-        cutoff = max_date - pd.Timedelta(days=TEST_WINDOW_DAYS)
-        min_date = hotel_df["date"].min()
-
-        for label, window in WINDOWS:
-            train_start = min_date if window is None else max(min_date, cutoff - pd.Timedelta(days=window))
-            merged = fit_prophet_window(hotel_df, cold_id, train_start, cutoff, max_date)
-            if merged is None:
+    for cold in ids:
+        hdf = df[df.hotel_id == cold].sort_values("date")
+        max_d = hdf.date.max(); cutoff = max_d - pd.Timedelta(days=TEST_DAYS); min_d = hdf.date.min()
+        test = hdf[hdf.date > cutoff]
+        for label, win in WINDOWS:
+            start = min_d if win is None else max(min_d, cutoff - pd.Timedelta(days=win))
+            train = hdf[(hdf.date >= start) & (hdf.date <= cutoff)]
+            if len(train) < 14 or test.empty:
                 continue
-            test_rows = merged[merged["date"] > cutoff]
-            if test_rows.empty:
+            y = train.bookings.values.astype(float); n = len(test)
+            actual = test.bookings.values.astype(float)
+            meta = dict(hotel=cold, window=label, mase_scale=np.mean(np.abs(y[7:] - y[:-7])))
+
+            def emit(method, dates, act, pred, lo=np.nan, hi=np.nan, tr_s=np.nan, inf_s=np.nan, size=np.nan):
+                out.append(pd.DataFrame({**meta, "method": method, "date": dates, "actual": act,
+                    "predicted": pred, "lower": lo, "upper": hi,
+                    "train_seconds": tr_s, "infer_seconds": inf_s, "model_bytes": size}))
+
+            # --- baselines ---
+            t = time.perf_counter(); last = y[-7:]; p = np.tile(last, n // 7 + 1)[:n]
+            emit("seasonal_naive", test.date.values, actual, p, tr_s=0.0, inf_s=time.perf_counter() - t, size=last.nbytes)
+            t = time.perf_counter(); p = np.full(n, y[-7:].mean())
+            emit("moving_average", test.date.values, actual, p, tr_s=0.0, inf_s=time.perf_counter() - t, size=8)
+            try:
+                t = time.perf_counter()
+                res = ExponentialSmoothing(y, trend=None, seasonal="add", seasonal_periods=7).fit()
+                tr_s = time.perf_counter() - t
+                t = time.perf_counter(); p = res.forecast(n); inf_s = time.perf_counter() - t
+                res.remove_data()
+                emit("ets", test.date.values, actual, p, tr_s=tr_s, inf_s=inf_s, size=len(pickle.dumps(res)))
+            except Exception:
+                pass
+
+            # --- Prophet ---
+            pr = fit_prophet_window(hdf, cold, start, cutoff, max_d)
+            if pr is None:
                 continue
+            merged, pmodel, p_fit, p_inf = pr
+            p_size = len(model_to_json(pmodel))
+            tr = merged[merged.date > cutoff]
+            emit("prophet_only", tr.date.values, tr.actual.values, tr.predicted.values,
+                 tr.lower.values, tr.upper.values, p_fit, p_inf, p_size)
 
-            m = score(test_rows["actual"], test_rows["predicted"])
-            rows.append({"hotel": cold_id, "window": label, "method": "prophet_only", **m})
-            # --- per-hotel-only XGBoost (no pooling) ---
-            feat_self = add_features(merged)
-            train_self = feat_self[feat_self["date"] <= cutoff].dropna(subset=FEATURE_COLS[:-1])
-            test_self = feat_self[feat_self["date"] > cutoff].dropna(subset=FEATURE_COLS[:-1])
-            if len(train_self) >= 5 and not test_self.empty:
-                m = train_pooled_xgb(train_self, **XGB_PARAMS)
-                pred = test_self["predicted"] + m.predict(test_self[FEATURE_COLS])
-                m = score(test_self["actual"], pred)
-                rows.append({"hotel": cold_id, "window": label, "method": "xgb_self_only", **m})
-            # --- pooled XGBoost (trained on OTHER hotels' full-history residuals) ---
-            other_ids = [h for h in hotel_ids if h != cold_id]
-            pool_df = pd.concat([full_residuals[h] for h in other_ids] + [merged], ignore_index=True)
-            feat_pool = add_features(pool_df)
-            train_pool = feat_pool[feat_pool["hotel_id"].isin(other_ids)].dropna(subset=FEATURE_COLS[:-1])
-            test_pool = feat_pool[(feat_pool["hotel_id"] == cold_id) & (feat_pool["date"] > cutoff)].dropna(subset=FEATURE_COLS[:-1])
-            if not test_pool.empty:
-                m = train_pooled_xgb(train_pool, **XGB_PARAMS)
-                pred = test_pool["predicted"] + m.predict(test_pool[FEATURE_COLS])
-                m = score(test_pool["actual"], pred)
-                rows.append({"hotel": cold_id, "window": label, "method": "xgb_pooled", **m})
+            # --- XGBoost on own residuals only ---
+            fs = add_features(merged)
+            a = fs[fs.date <= cutoff].dropna(subset=FEATURE_COLS[:-1])
+            b = fs[fs.date > cutoff].dropna(subset=FEATURE_COLS[:-1])
+            if len(a) >= 5 and not b.empty:
+                t = time.perf_counter(); m = train_pooled_xgb(a, **XGB); x_fit = time.perf_counter() - t
+                t = time.perf_counter(); c = m.predict(b[FEATURE_COLS]); x_inf = time.perf_counter() - t
+                emit("xgb_self_only", b.date.values, b.actual.values, b.predicted.values + c,
+                     b.lower.values + c, b.upper.values + c, p_fit + x_fit, p_inf + x_inf, p_size + len(pickle.dumps(m)))
 
-            print(f"{cold_id[:20]:<20} {label:<5} done")
+            # --- pooled XGBoost (leave-one-hotel-out) ---
+            others = [h for h in ids if h != cold]
+            pool = add_features(pd.concat([full_res[h] for h in others] + [merged], ignore_index=True))
+            a = pool[pool.hotel_id.isin(others)].dropna(subset=FEATURE_COLS[:-1])
+            b = pool[(pool.hotel_id == cold) & (pool.date > cutoff)].dropna(subset=FEATURE_COLS[:-1])
+            if not b.empty:
+                t = time.perf_counter(); m = train_pooled_xgb(a, **XGB); x_fit = time.perf_counter() - t
+                t = time.perf_counter(); c = m.predict(b[FEATURE_COLS]); x_inf = time.perf_counter() - t
+                emit("xgb_pooled", b.date.values, b.actual.values, b.predicted.values + c,
+                     b.lower.values + c, b.upper.values + c, p_fit + x_fit, p_inf + x_inf, p_size + len(pickle.dumps(m)))
+            print(cold[:20], label, "done")
 
-    results = pd.DataFrame(rows)
-    results.to_csv(EXPERIMENTS_DIR / "coldstart_multiwindow_results.csv", index=False)
-    print(f"\nSaved results table to {EXPERIMENTS_DIR / 'coldstart_multiwindow_results.csv'}")
-
-    avg = results.groupby(["window", "method"])["mape"].mean().reset_index()
-    print("\n=== Average MAPE by window size and method ===")
-    print(avg.pivot(index="window", columns="method", values="mape").reindex([w[0] for w in WINDOWS]).to_string())
-
-    fig, ax = plt.subplots(figsize=(9, 6))
-    window_order = [w[0] for w in WINDOWS]
-    for method in ["prophet_only", "xgb_self_only", "xgb_pooled"]:
-        sub = avg[avg["method"] == method].set_index("window").reindex(window_order)
-        ax.plot(window_order, sub["mape"], marker="o", label=method)
-    ax.set_xlabel("Training window size"); ax.set_ylabel("Avg MAPE (%)")
-    ax.set_title("Forecast accuracy vs. training window size (avg across 5 hotels)")
-    ax.legend(); ax.grid(alpha=0.3)
-    fig.tight_layout()
-    plot_path = EXPERIMENTS_DIR / "mape_vs_window.png"
-    fig.savefig(plot_path, dpi=150)
-    print(f"Saved plot to {plot_path}")
+    pd.concat(out, ignore_index=True).to_csv(EXP / "coldstart_predictions.csv", index=False)
+    print("Saved", EXP / "coldstart_predictions.csv")
 
 if __name__ == "__main__":
     main()

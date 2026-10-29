@@ -2,7 +2,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Building2, Lock, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 
 const IDLE_MS = Number(process.env.NEXT_PUBLIC_IDLE_LOCK_MINUTES ?? "3") * 60_000;
@@ -39,7 +38,15 @@ export function IdleLockscreen({ hotelName }: { hotelName: string }) {
         body: JSON.stringify({ password }),
       });
       if (!res.ok) {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
+        if (res.status === 401 && data.error === "Not logged in.") {
+          window.location.href = "/login";
+          return;
+        }
+        if (res.status === 429) {
+          setError(data.error ?? "Too many failed attempts. Try again in 15 minutes.");
+          return;
+        }
         setError(data.error ?? "Incorrect password.");
         return;
       }
