@@ -260,3 +260,15 @@ model LoginAttempt {
   @@index([key, createdAt(sort: Desc)])
   @@map("login_attempts")
 }
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  hotelId    String   @map("hotel_id") @db.Uuid
+  employeeId String?  @map("employee_id") @db.Uuid
+  action     String
+  detail     Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([hotelId, createdAt(sort: Desc)])
+  @@map("audit_log")
+}

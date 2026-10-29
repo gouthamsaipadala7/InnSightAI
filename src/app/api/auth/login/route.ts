@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { audit } from "@/lib/audit";
 
 import { prisma } from "@/lib/prisma";
 import { SESSION_COOKIE_NAME, signSession, verifyPassword } from "@/lib/auth";
@@ -49,6 +50,7 @@ export async function POST(request: Request) {
     return invalidCredentials();
   }
   await recordAttempt(limitKey, true);
+  await audit(employee.hotelId, employee.id, "login");
 
   const token = await signSession({
     employeeId: employee.id,

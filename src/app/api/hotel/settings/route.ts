@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { audit } from "@/lib/audit";
 
 import { prisma } from "@/lib/prisma";
 import { AuthError, requireRole } from "@/lib/session";
@@ -173,6 +174,9 @@ export async function PATCH(request: Request) {
       return { totalRooms, roomTypeCount: allRoomTypes.length };
     });
 
+      await audit(session.hotelId, session.employeeId, "hotel_settings_updated", {
+      totalRooms: summary.totalRooms,
+    });
     return NextResponse.json({ success: true, ...summary });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Update failed.";
