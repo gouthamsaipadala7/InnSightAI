@@ -30,8 +30,11 @@ enum EmployeeRole {
 }
 
 enum BookingStatus {
+  reserved
   active
   checked_out
+  cancelled
+  no_show
 }
 
 enum HousekeepingStatus {
