@@ -57,7 +57,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
         },
       });
 
-      return { totalAmount, roomNumber: booking.room.roomNumber };
+            const advance = Number(booking.initialPayment);
+      return {
+        totalAmount,
+        advancePaid: advance,
+        balanceDue: Math.max(0, totalAmount - advance),
+        roomNumber: booking.room.roomNumber,
+      };
     });
 
     return NextResponse.json({ success: true, ...result });

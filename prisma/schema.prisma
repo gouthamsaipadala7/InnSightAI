@@ -30,8 +30,11 @@ enum EmployeeRole {
 }
 
 enum BookingStatus {
+  reserved
   active
   checked_out
+  cancelled
+  no_show
 }
 
 enum HousekeepingStatus {
@@ -55,6 +58,9 @@ model Hotel {
   totalRooms     Int      @map("total_rooms")
   employeesCount Int      @map("employees_count")
   setupCompleted Boolean  @default(false) @map("setup_completed")
+  timezone      String   @default("Asia/Kolkata") @map("timezone")
+  checkinHhmm   String   @default("12:00") @map("checkin_hhmm")
+  checkoutHhmm  String   @default("12:00") @map("checkout_hhmm")
   createdAt      DateTime @default(now()) @map("created_at")
   updatedAt      DateTime @updatedAt @map("updated_at")
 

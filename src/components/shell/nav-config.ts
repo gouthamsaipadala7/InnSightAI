@@ -2,6 +2,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   BarChart3,
   BrainCircuit,
+  CalendarPlus,
   ClipboardList,
   DoorOpen,
   History,
@@ -12,7 +13,6 @@ import {
   Wallet,
 } from "lucide-react";
 
-
 export interface NavItem {
   label: string;
   href: string;
@@ -20,12 +20,12 @@ export interface NavItem {
 }
 
 /**
- * Receptionist modules, in the same order as the original project spec
- * (Check-in & Room Availability listed first — that's also where
- * /dashboard/reception redirects to by default).
+ * Receptionist modules. Check-in & Availability is listed first, and is
+ * where /dashboard/reception redirects to by default.
  */
 export const RECEPTIONIST_NAV: NavItem[] = [
   { label: "Check-in & Availability", href: "/dashboard/reception/checkin", icon: DoorOpen },
+  { label: "Reservations", href: "/dashboard/reception/reservations", icon: CalendarPlus },
   { label: "Room Types", href: "/dashboard/reception/room-types", icon: BedDouble },
   { label: "View Bookings", href: "/dashboard/reception/bookings", icon: ClipboardList },
   { label: "Housekeeping", href: "/dashboard/reception/housekeeping", icon: Sparkles },
@@ -36,10 +36,8 @@ export const RECEPTIONIST_NAV: NavItem[] = [
 ];
 
 /**
- * Manager/MD nav. "Hotel Settings" isn't one of Phase 5's 8 listed
- * placeholders, but it's a real page built in Phase 4 — linking to it here
- * is the natural, low-risk way to make it reachable now that a manager has
- * an actual shell instead of the login page's old placeholder button.
+ * Manager/MD nav. Hotel Settings is a real page, linked here so a manager
+ * can reach it from the shell.
  */
 export const MANAGER_NAV: NavItem[] = [
   { label: "MD Dashboard", href: "/dashboard/manager", icon: LayoutDashboard },

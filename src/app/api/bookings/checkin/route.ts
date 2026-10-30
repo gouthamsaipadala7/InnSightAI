@@ -84,8 +84,11 @@ export async function POST(request: Request) {
       bookingId: result.booking.id,
       roomNumber: result.room.roomNumber,
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Check-in failed.";
-    return NextResponse.json({ error: message }, { status: 400 });
+    } catch (error) {
+    const raw = error instanceof Error ? error.message : "";
+    if (raw.includes("no_room_overlap") || raw.includes("23P01")) {
+      return NextResponse.json({ error: "Room already booked for this period." }, { status: 409 });
+    }
+    return NextResponse.json({ error: raw || "Check-in failed." }, { status: 400 });
   }
 }

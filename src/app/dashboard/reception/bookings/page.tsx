@@ -25,6 +25,8 @@ import {
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 
+type Status = "reserved" | "active" | "checked_out" | "cancelled" | "no_show";
+
 interface Booking {
   id: string;
   customerName: string;
@@ -35,8 +37,24 @@ interface Booking {
   checkoutTime: string | null;
   initialPayment: number;
   totalAmount: number | null;
-  status: "active" | "checked_out";
+  status: Status;
 }
+
+const STATUS_LABEL: Record<Status, string> = {
+  reserved: "Reserved",
+  active: "Active",
+  checked_out: "Checked out",
+  cancelled: "Cancelled",
+  no_show: "No-show",
+};
+
+const STATUS_CLASS: Record<Status, string> = {
+  reserved: "bg-amber-100 text-amber-800",
+  active: "bg-emerald-soft text-emerald-hover",
+  checked_out: "bg-graphite-100 text-graphite-500",
+  cancelled: "bg-graphite-100 text-graphite-400",
+  no_show: "bg-graphite-100 text-graphite-400",
+};
 
 type SortKey = "customerName" | "roomNumber" | "checkinTime" | "status";
 
@@ -57,7 +75,8 @@ export default function BookingsPage() {
       .then((data) => setBookings(data.bookings ?? []))
       .finally(() => setLoaded(true));
   }, []);
-    useEffect(() => {
+
+  useEffect(() => {
     const q = searchParams.get("search");
     if (q) setSearch(q);
   }, [searchParams]);
@@ -103,10 +122,18 @@ export default function BookingsPage() {
         setCheckoutError(data.error ?? "Checkout failed.");
         return;
       }
-            setBookings((prev) =>
-        prev.map((b) => (b.id === selected.id ? { ...b, status: "checked_out" } : b))
+      setBookings((prev) =>
+        prev.map((b) =>
+          b.id === selected.id
+            ? { ...b, status: "checked_out", totalAmount: data.totalAmount ?? b.totalAmount }
+            : b
+        )
       );
-      toast.success(`${selected.customerName} checked out — room ${selected.roomNumber}`);
+      toast.success(
+        `${selected.customerName} checked out of room ${selected.roomNumber}. ` +
+          `Total Rs ${data.totalAmount}, advance Rs ${data.advancePaid ?? 0}, balance due Rs ${data.balanceDue ?? 0}`,
+        { duration: 10000 }
+      );
       setSelected(null);
     } catch {
       setCheckoutError("Couldn't reach the server.");
@@ -142,7 +169,7 @@ export default function BookingsPage() {
       <div className="relative max-w-sm">
         <Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-graphite-400" />
         <Input
-          placeholder="Search by customer name or room number…"
+          placeholder="Search by customer name or room number..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="pl-9"
@@ -184,12 +211,10 @@ export default function BookingsPage() {
                     <span
                       className={cn(
                         "rounded-full px-2 py-0.5 text-xs font-medium",
-                        b.status === "active"
-                          ? "bg-emerald-soft text-emerald-hover"
-                          : "bg-graphite-100 text-graphite-500"
+                        STATUS_CLASS[b.status] ?? "bg-graphite-100 text-graphite-500"
                       )}
                     >
-                      {b.status === "active" ? "Active" : "Checked out"}
+                      {STATUS_LABEL[b.status] ?? b.status}
                     </span>
                   </TableCell>
                 </TableRow>
@@ -228,14 +253,14 @@ export default function BookingsPage() {
               <Row label="Check-in" value={new Date(selected.checkinTime).toLocaleString()} />
               <Row
                 label="Check-out"
-                value={selected.checkoutTime ? new Date(selected.checkoutTime).toLocaleString() : "—"}
+                value={selected.checkoutTime ? new Date(selected.checkoutTime).toLocaleString() : "-"}
               />
               <Row label="Initial payment" value={selected.initialPayment.toFixed(2)} />
               <Row
                 label="Total amount"
-                value={selected.totalAmount !== null ? selected.totalAmount.toFixed(2) : "—"}
+                value={selected.totalAmount !== null ? selected.totalAmount.toFixed(2) : "-"}
               />
-              <Row label="Status" value={selected.status === "active" ? "Active" : "Checked out"} />
+              <Row label="Status" value={STATUS_LABEL[selected.status] ?? selected.status} />
 
               {checkoutError && (
                 <p className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-destructive">
@@ -253,7 +278,7 @@ export default function BookingsPage() {
               {checkingOut ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
-                  Checking out…
+                  Checking out...
                 </>
               ) : (
                 "Check out"
