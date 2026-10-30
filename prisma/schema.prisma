@@ -278,3 +278,18 @@ model AuditLog {
   @@index([hotelId, createdAt(sort: Desc)])
   @@map("audit_log")
 }
+
+model Payment {
+  id             String   @id @default(uuid()) @db.Uuid
+  hotelId        String   @map("hotel_id") @db.Uuid
+  bookingId      String   @map("booking_id") @db.Uuid
+  amountPaise    Int      @map("amount_paise")
+  method         String
+  idempotencyKey String   @map("idempotency_key")
+  createdBy      String?  @map("created_by") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@unique([hotelId, idempotencyKey])
+  @@index([hotelId, bookingId])
+  @@map("payments")
+}
